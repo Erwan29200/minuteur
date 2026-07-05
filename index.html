@@ -408,66 +408,144 @@
       sources.push(src2);
 
     } else if(type === 'waves'){
-      const buf = makeNoiseBuffer(6, 0.6);
-      const src = audioCtx.createBufferSource();
-      src.buffer = buf; src.loop = true;
-      const lowpass = audioCtx.createBiquadFilter();
-      lowpass.type = 'lowpass'; lowpass.frequency.value = 1200;
-      const g = audioCtx.createGain(); g.gain.value = 0.8;
-      src.connect(lowpass); lowpass.connect(g); g.connect(out);
-      src.start();
-      sources.push(src);
+      // Couche de fond : ressac lointain, grave et continu
+      const bedBuf = makeNoiseBuffer(6, 0.75);
+      const bedSrc = audioCtx.createBufferSource();
+      bedSrc.buffer = bedBuf; bedSrc.loop = true;
+      const bedFilter = audioCtx.createBiquadFilter();
+      bedFilter.type = 'lowpass'; bedFilter.frequency.value = 220;
+      const bedGain = audioCtx.createGain(); bedGain.gain.value = 0.22;
+      bedSrc.connect(bedFilter); bedFilter.connect(bedGain); bedGain.connect(out);
+      bedSrc.start();
+      sources.push(bedSrc);
 
-      // slow swell LFO on gain + cutoff
-      const lfo = audioCtx.createOscillator();
-      lfo.frequency.value = 0.09;
-      const lfoGain = audioCtx.createGain();
-      lfoGain.gain.value = 0.35;
-      lfo.connect(lfoGain); lfoGain.connect(g.gain);
-      lfo.start();
-      sources.push(lfo);
+      // Cycles de vagues individuelles : montée -> écume (chuintement clair) -> retrait
+      function scheduleWave(){
+        if(!ambienceNodes) return;
+        const cycle = 5.5 + Math.random()*3.5; // 5.5 à 9s par vague
+        const now = audioCtx.currentTime;
 
-      const lfo2 = audioCtx.createOscillator();
-      lfo2.frequency.value = 0.07;
-      const lfo2Gain = audioCtx.createGain();
-      lfo2Gain.gain.value = 500;
-      lfo2.connect(lfo2Gain); lfo2Gain.connect(lowpass.frequency);
-      lfo2.start();
-      sources.push(lfo2);
+        const buf = makeNoiseBuffer(cycle + 1, 0.15); // assez large bande, un peu de corps
+        const wsrc = audioCtx.createBufferSource();
+        wsrc.buffer = buf;
+        const wfilter = audioCtx.createBiquadFilter();
+        wfilter.type = 'lowpass';
+        const wgain = audioCtx.createGain();
+        wsrc.connect(wfilter); wfilter.connect(wgain); wgain.connect(out);
+
+        const riseEnd = cycle * 0.5;      // la vague monte
+        const crashEnd = cycle * 0.62;    // elle s'écrase : pic d'écume
+        const recedeEnd = cycle;          // elle se retire
+
+        // volume : monte doucement, pic net au crash, puis retombe en traînant
+        wgain.gain.setValueAtTime(0.03, now);
+        wgain.gain.linearRampToValueAtTime(0.55, now + riseEnd);
+        wgain.gain.linearRampToValueAtTime(0.9, now + crashEnd);
+        wgain.gain.linearRampToValueAtTime(0.08, now + recedeEnd);
+
+        // couleur : sourd en approche, très clair (écume/chuintement) au crash, puis s'assourdit
+        wfilter.frequency.setValueAtTime(250, now);
+        wfilter.frequency.linearRampToValueAtTime(1100, now + riseEnd);
+        wfilter.frequency.linearRampToValueAtTime(4200, now + crashEnd);
+        wfilter.frequency.linearRampToValueAtTime(350, now + recedeEnd);
+        wfilter.Q.value = 0.4;
+
+        wsrc.start(now);
+        wsrc.stop(now + cycle + 0.6);
+
+        const nextIn = cycle * (0.7 + Math.random()*0.25); // les vagues se chevauchent un peu
+        const tid = setTimeout(scheduleWave, nextIn * 1000);
+        timers.push(tid);
+      }
+      scheduleWave();
 
     } else if(type === 'fire'){
-      const buf = makeNoiseBuffer(5, 0.85);
+      // Base chaude : ronflement grave de la combustion
+      const buf = makeNoiseBuffer(5, 0.9);
       const src = audioCtx.createBufferSource();
       src.buffer = buf; src.loop = true;
       const lowpass = audioCtx.createBiquadFilter();
-      lowpass.type = 'lowpass'; lowpass.frequency.value = 500;
-      const g = audioCtx.createGain(); g.gain.value = 0.9;
-      src.connect(lowpass); lowpass.connect(g); g.connect(out);
+      lowpass.type = 'lowpass'; lowpass.frequency.value = 420;
+      const warmth = audioCtx.createBiquadFilter();
+      warmth.type = 'peaking'; warmth.frequency.value = 180; warmth.Q.value = 0.8; warmth.gain.value = 5;
+      const g = audioCtx.createGain(); g.gain.value = 0.55;
+      src.connect(lowpass); lowpass.connect(warmth); warmth.connect(g); g.connect(out);
       src.start();
       sources.push(src);
 
-      // crackle pops
-      function pop(){
-        if(!ambienceNodes) return;
-        const dur = 0.05 + Math.random()*0.05;
+      // scintillement : la flamme "respire", volume qui vacille légèrement et sans régularité
+      [0.6, 1.3, 2.7].forEach((freq, i)=>{
+        const flick = audioCtx.createOscillator();
+        flick.frequency.value = freq;
+        const flickGain = audioCtx.createGain();
+        flickGain.gain.value = 0.05 - i*0.012;
+        flick.connect(flickGain); flickGain.connect(g.gain);
+        flick.start();
+        sources.push(flick);
+      });
+
+      // crépitements : petits crépitements secs fréquents + craquements graves occasionnels (bûche qui travaille)
+      function smallCrackle(){
+        const dur = 0.04 + Math.random()*0.05;
         const pbuf = makeNoiseBuffer(dur, 0);
         const psrc = audioCtx.createBufferSource();
         psrc.buffer = pbuf;
         const hp = audioCtx.createBiquadFilter();
-        hp.type = 'highpass'; hp.frequency.value = 1500 + Math.random()*2000;
+        hp.type = 'highpass'; hp.frequency.value = 1800 + Math.random()*2500;
         const pg = audioCtx.createGain();
         const t0 = audioCtx.currentTime;
         pg.gain.setValueAtTime(0.0001, t0);
-        pg.gain.exponentialRampToValueAtTime(0.5 + Math.random()*0.5, t0+0.005);
+        pg.gain.exponentialRampToValueAtTime(0.35 + Math.random()*0.45, t0+0.004);
         pg.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
         psrc.connect(hp); hp.connect(pg); pg.connect(out);
         psrc.start();
         psrc.stop(t0+dur+0.02);
       }
-      const timer = setInterval(()=>{
-        if(Math.random() < 0.7) pop();
-      }, 350);
-      timers.push(timer);
+
+      function deepCrack(){
+        const dur = 0.12 + Math.random()*0.18;
+        const t0 = audioCtx.currentTime;
+        // corps du craquement : bruit filtré passe-bande grave
+        const pbuf = makeNoiseBuffer(dur, 0.1);
+        const psrc = audioCtx.createBufferSource();
+        psrc.buffer = pbuf;
+        const bp = audioCtx.createBiquadFilter();
+        bp.type = 'bandpass'; bp.frequency.value = 300 + Math.random()*400; bp.Q.value = 1.2;
+        const pg = audioCtx.createGain();
+        pg.gain.setValueAtTime(0.0001, t0);
+        pg.gain.exponentialRampToValueAtTime(0.5 + Math.random()*0.3, t0+0.01);
+        pg.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+        psrc.connect(bp); bp.connect(pg); pg.connect(out);
+        psrc.start(); psrc.stop(t0+dur+0.02);
+        // petit "thud" grave associé
+        const thud = audioCtx.createOscillator();
+        thud.type='sine'; thud.frequency.value = 90 + Math.random()*40;
+        const tg = audioCtx.createGain();
+        tg.gain.setValueAtTime(0.0001, t0);
+        tg.gain.exponentialRampToValueAtTime(0.3, t0+0.008);
+        tg.gain.exponentialRampToValueAtTime(0.0001, t0+0.15);
+        thud.connect(tg); tg.connect(out);
+        thud.start(t0); thud.stop(t0+0.2);
+      }
+
+      function scheduleCrackle(){
+        if(!ambienceNodes) return;
+        const r = Math.random();
+        if(r < 0.09){
+          deepCrack();
+        } else if(r < 0.75){
+          smallCrackle();
+        }
+        // parfois une petite salve rapprochée de 2-3 crépitements
+        if(r > 0.75 && r < 0.85){
+          smallCrackle();
+          setTimeout(()=>{ if(ambienceNodes) smallCrackle(); }, 40 + Math.random()*60);
+        }
+        const nextIn = 150 + Math.random()*500;
+        const tid = setTimeout(scheduleCrackle, nextIn);
+        timers.push(tid);
+      }
+      scheduleCrackle();
 
     } else if(type === 'wind'){
       const buf = makeNoiseBuffer(6, 0.2);
@@ -495,6 +573,24 @@
       lfo2.connect(lfo2Gain); lfo2Gain.connect(g.gain);
       lfo2.start();
       sources.push(lfo2);
+
+      // léger sifflement dans les bourrasques (passe-bande résonant qui dérive lentement)
+      const whistleSrc = audioCtx.createBufferSource();
+      whistleSrc.buffer = buf; whistleSrc.loop = true;
+      const whistle = audioCtx.createBiquadFilter();
+      whistle.type = 'bandpass'; whistle.frequency.value = 900; whistle.Q.value = 6;
+      const whistleGain = audioCtx.createGain(); whistleGain.gain.value = 0.12;
+      whistleSrc.connect(whistle); whistle.connect(whistleGain); whistleGain.connect(out);
+      whistleSrc.start();
+      sources.push(whistleSrc);
+
+      const wlfo = audioCtx.createOscillator();
+      wlfo.frequency.value = 0.045;
+      const wlfoGain = audioCtx.createGain();
+      wlfoGain.gain.value = 350;
+      wlfo.connect(wlfoGain); wlfoGain.connect(whistle.frequency);
+      wlfo.start();
+      sources.push(wlfo);
     }
 
     ambienceNodes = { gain: out, sources, timers };
