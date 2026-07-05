@@ -1,4 +1,4 @@
-const CACHE_NAME = "minuteur-ambiance-v2";
+const CACHE_NAME = "minuteur-ambiance-v3";
 const ASSETS = [
   "./index.html",
   "./manifest.json",
