@@ -369,7 +369,7 @@
     }
   }
 
-  function startAmbience(type){
+  async function startAmbience(type){
     stopAmbience();
     if(type === 'none') return;
     ensureAudio();
@@ -378,12 +378,43 @@
     out.gain.value = 0;
     out.connect(masterGain);
     const now = audioCtx.currentTime;
-    const levelByType = { rain: 0.8, waves: 1.35, fire: 0.8, wind: 0.8 };
+    const levelByType = { rain: 0.8, waves: 1.0, fire: 0.8, wind: 0.8 };
     out.gain.linearRampToValueAtTime(levelByType[type] || 0.8, now + 1.2);
 
     const sources = [];
     const timers = [];
+    const node = { gain: out, sources, timers };
+    ambienceNodes = node;
 
+    // 1) On essaie d'abord un vrai fichier audio (sounds/<type>.mp3) s'il a été ajouté
+    const fileMap = { rain: 'sounds/rain.mp3', waves: 'sounds/waves.mp3', fire: 'sounds/fire.mp3', wind: 'sounds/wind.mp3' };
+    let loadedFromFile = false;
+    if(fileMap[type]){
+      try{
+        const resp = await fetch(fileMap[type]);
+        if(resp.ok){
+          const arrBuf = await resp.arrayBuffer();
+          const decoded = await audioCtx.decodeAudioData(arrBuf);
+          if(ambienceNodes !== node) return; // l'utilisateur a changé de son entre temps
+          const fsrc = audioCtx.createBufferSource();
+          fsrc.buffer = decoded; fsrc.loop = true;
+          fsrc.connect(out);
+          fsrc.start();
+          sources.push(fsrc);
+          loadedFromFile = true;
+        }
+      }catch(e){
+        loadedFromFile = false;
+      }
+    }
+
+    // 2) Sinon, on retombe sur la génération synthétique (fonctionne toujours, sans fichier)
+    if(!loadedFromFile && ambienceNodes === node){
+      synthAmbience(type, out, sources, timers);
+    }
+  }
+
+  function synthAmbience(type, out, sources, timers){
     if(type === 'rain'){
       const buf = makeNoiseBuffer(4, 0);
       const src = audioCtx.createBufferSource();
@@ -644,8 +675,6 @@
       const cricketStart = setTimeout(cricketChirp, 1000 + Math.random()*2000);
       timers.push(cricketStart);
     }
-
-    ambienceNodes = { gain: out, sources, timers };
   }
 
   function playGong(){
